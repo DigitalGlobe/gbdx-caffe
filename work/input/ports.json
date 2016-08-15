@@ -1,0 +1,9 @@
+{
+  "threshold" : "90",
+  "gpu_flag" : "false",
+  "pyramid_window_sizes" : "[28]",
+  "pyramid_step_sizes" : "[28]",
+  "num_processes" : "1",
+  "class_thresholds" : "1:70 4:70 3:70",
+  "log_level" : "info"
+}

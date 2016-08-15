@@ -1,0 +1,88 @@
+
+{
+        "name": "gbdx-caffe-preprocessing-workflow",
+        "tasks": [
+         {
+            "name": "caffe-aop"
+            "taskType": "AOP_Strip_Processor",
+            "inputs": [
+                {
+                    "name": "data",
+                    "value": "s3://receiving-dgcs-tdgplatform-com/055197215010_01_003"
+                },
+                {
+                    "name": "enable_acomp",
+                    "value": "true"
+                },
+                {
+                    "name": "enable_pansharpen",
+                    "value": "true"
+                },
+                {
+                    "name": "enable_dra",
+                    "value": "false"
+                },
+                {
+                    "name": "bands",
+                    "value": "MS"
+                },
+                {
+                    "name": "ortho_epsg",
+                    "value": "UTM"
+                },
+                {
+                    "name": "ortho_pixel_size",
+                    "value": "0.5"
+                },
+                {
+                    "name": "ortho_dem_specifier",
+                    "value": "SRTM90"
+                },
+                {
+                    "name": "ortho_interpolation_type",
+                    "value": "Bilinear"
+                },
+                {
+                    "name": "acomp_aod_grid_size",
+                    "value": "10"
+                }
+            ],
+            "outputs": [
+                {
+                    "name": "data"
+                },
+                {
+                    "name": "log"
+                }
+            ]
+            },
+            {
+                "name": "StagetoS3AOPData",
+                "taskType": "StageDataToS3",
+                "inputs": [
+                    {
+                        "name": "data",
+                        "source": "caffe-aop:data"
+                    },
+                    {
+                        "name": "destination",
+                        "value": "s3://gbd-customer-data/7d8cfdb6-13ee-4a2a-bf7e-0aff4795d927/ctusk/caffe-test/data/aop"
+                    }
+                ]
+            },
+            {
+                "name": "StagetoS3AOPLogs",
+                "taskType": "StageDataToS3",
+                "inputs": [
+                    {
+                        "name": "data",
+                        "source": "caffe-aop:log"
+                    },
+                    {
+                        "name": "destination",
+                        "value": "s3://gbd-customer-data/7d8cfdb6-13ee-4a2a-bf7e-0aff4795d927/ctusk/caffe-test/logs/aop"
+                    }
+                ]
+            }
+        ]
+}

@@ -1,0 +1,92 @@
+{
+  "name": "gbdx-caffe-v1.0",
+  "description": "Caffe based object detector",
+  "properties": {
+    "isPublic": false,
+    "timeout": 36000
+  },
+  "containerDescriptors": [
+    {
+      "type": "GPUDOCKER",
+      "properties": {
+        "image": "pdlimp/private:gbdx-caffe-v1.0",
+        "domain": "gpu"
+      }
+    }
+  ],
+  "inputPortDescriptors": [
+    {
+      "name": "image",
+      "description": "Input scene, expecting a single geotiff",
+      "type": "image",
+      "required": true
+    },
+    {
+      "name": "model",
+      "description": "The trained model to use",
+      "type": "directory",
+      "required": true
+    },
+    {
+      "name": "threshold",
+      "description": "Default probability threshold for all classes",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "bounding_box",
+      "description": "Bounding box for detection, must fall within scene perimeters. Format in lat/lon: minx,miny, maxx,maxy",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "gpu_flag",
+      "description": "Use GPU",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "pyramid_window_sizes",
+      "description": "Array of window sizes for detection. e.g. [100, 80, 50]",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "pyramid_step_sizes",
+      "description": "Array of step sizes for detection. e.g. [40, 20, 10]",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "num_processes",
+      "description": "Number of processes to run in CPU mode",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "class_thresholds",
+      "description": "Individual class thresholds based on labels, e.g. 'Airliner:70 Fighter:50 Helicopter:80'",
+      "type": "string",
+      "required": false
+    },
+    {
+      "name": "log_level",
+      "description": "Log Level: info error warn",
+      "type": "string",
+      "required": false
+    }
+
+  ],
+  "outputPortDescriptors": [
+    {
+      "name": "result",
+      "type": "directory",
+      "description": "The output data directory."
+    },
+    {
+      "name": "log",
+      "type": "directory",
+      "description": "The output log directory."
+    }
+  ]
+}

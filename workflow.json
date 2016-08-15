@@ -1,0 +1,76 @@
+{
+  "name": "gbdx-caffe test workflow",
+  "tasks": [
+    {
+      "name": "gbdx-caffe",
+      "taskType": "gbdx-caffe-v1.0",
+      "inputs": [
+        {
+          "name": "image",
+          "value": "s3://gbd-customer-data/7d8cfdb6-13ee-4a2a-bf7e-0aff4795d927/ctusk/caffe-test/input/image"
+        },
+        {
+          "name": "model",
+          "value": "s3://gbd-customer-data/7d8cfdb6-13ee-4a2a-bf7e-0aff4795d927/ctusk/caffe-test/input/model"
+        },
+        {
+          "name": "threshold",
+          "value": "80"
+        },
+        {
+          "name": "gpu_flag",
+          "value": "true"
+        },
+        {
+          "name": "pyramid_window_sizes",
+          "value": "[28]"
+        },
+        {
+          "name": "pyramid_step_sizes",
+          "value": "[28]"
+        },
+        {
+          "name": "log_level",
+          "value": "info"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result"
+        },
+        {
+          "name": "log"
+        }
+      ]
+    },
+    {
+      "name": "StagetoS3-log",
+      "taskType": "StageDataToS3",
+      "inputs": [
+        {
+          "name": "data",
+          "source": "gbdx-caffe:log"
+        },
+        {
+          "name": "destination",
+          "value": "s3://gbd-customer-data/7d8cfdb6-13ee-4a2a-bf7e-0aff4795d927/ctusk/caffe-test/output/log"
+        }
+      ]
+    },
+    {
+      "name": "StagetoS3-data",
+      "taskType": "StageDataToS3",
+      "inputs": [
+        {
+          "name": "data",
+          "source": "gbdx-caffe:result"
+        },
+        {
+          "name": "destination",
+          "value": "s3://gbd-customer-data/7d8cfdb6-13ee-4a2a-bf7e-0aff4795d927/ctusk/caffe-test/output/"
+        }
+      ]
+    }
+
+  ]
+}
