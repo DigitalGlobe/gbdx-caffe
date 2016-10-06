@@ -14,16 +14,10 @@ import gdal
 from gdalconst import *
 import osr
 import logging as log
-import skimage.io
 import re
 from string import Template
 from functools import partial
-import tempfile
-import atexit
-import shutil
-import subprocess
 import zipfile
-import uuid
 import traceback
 import cv2
 import ast
@@ -81,6 +75,7 @@ def caffe_window_transform(window, transformed_size, transformed_window, mean):
     """
     # RGB -> BGR
     window[:, :, [0, 2]] = window[:, :, [2, 0]]
+
     # Channel as leftmost dimension (as required by caffe)
     # (h, w, 3) -> (3, h, w)
     # Then scale by 256. to produce images of appropriate scaling for caffe
@@ -125,7 +120,7 @@ class GDALImage:
         self.tilewidth = tilewidth
         self.tileheight = tileheight
         # Open dataset
-        self.dataset = gdal.Open(self.imagefile)
+        self.dataset = gdal.Open(self.imagefile, gdal.GA_ReadOnly)
         self.nbands = self.dataset.RasterCount
         self.width = self.dataset.RasterXSize
         self.height = self.dataset.RasterYSize
@@ -795,20 +790,20 @@ def classify_broad_area_multi_process(gdal_image, image, x0,y0, args,
 
 def parse_args(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tif", "-t", help="the geotif to perform analysis on", required=True)
-    parser.add_argument("--imd", "-i", help="the imd metadata file")
-    parser.add_argument("--model_paths", "-m", help="the directory holding the model files", required=True, nargs="+")
+    parser.add_argument("--tif", "-t", help="The geotif to perform analysis on", required=True)
+    parser.add_argument("--imd", "-i", help="The imd metadata file")
+    parser.add_argument("--model_paths", "-m", help="The directory holding the model files", required=True, nargs="+")
     parser.add_argument("--threshold", "-th",
-                        help="the probability threshold above which an item will be written to the output",
+                        help="The probability threshold above which an item will be written to the output",
                         type=float, default=DEFAULT_THRESHOLD)
-    parser.add_argument("--win_size", "-w", help="the window size in pixels", type=int, default=DEFAULT_WIN_SIZE)
-    parser.add_argument("--step_size", "-s", help="the step size in pixels", type=int, default=DEFAULT_STEP_SIZE)
-    parser.add_argument("--status_path", "-sp", help="the output path for the status file", default=DEFAULT_STATUS_JSON_PATH)
-    parser.add_argument("--pyramid_min_size", "-pms", help="the minimum pyramid size in pixels", type=int, default=DEFAULT_MIN_PYRAMID_SIZE)
-    parser.add_argument("--pyramid_scale_factor", "-psf", help="the scale factor to scale images in the pyramid", type=float, default=DEFAULT_PYRAMID_SCALE_FACTOR)
-    parser.add_argument("--bounding_box", "-bb", help="the sub-section of the geotif to analyze", default=None)
-    parser.add_argument("--gpu_flag", "-gf", help="the flag to set when using gpu", default=DEFAULT_GPU_FLAG)
-    parser.add_argument("--image_name", "-in", help="name of image to include in name field of output vectors", default=None)
+    parser.add_argument("--win_size", "-w", help="The window size in pixels", type=int, default=DEFAULT_WIN_SIZE)
+    parser.add_argument("--step_size", "-s", help="The step size in pixels", type=int, default=DEFAULT_STEP_SIZE)
+    parser.add_argument("--status_path", "-sp", help="The output path for the status file", default=DEFAULT_STATUS_JSON_PATH)
+    parser.add_argument("--pyramid_min_size", "-pms", help="The minimum pyramid size in pixels", type=int, default=DEFAULT_MIN_PYRAMID_SIZE)
+    parser.add_argument("--pyramid_scale_factor", "-psf", help="The scale factor to scale images in the pyramid", type=float, default=DEFAULT_PYRAMID_SCALE_FACTOR)
+    parser.add_argument("--bounding_box", "-bb", help="The sub-section of the geotif to analyze", default=None)
+    parser.add_argument("--gpu_flag", "-gf", help="The flag to set when using gpu", default=DEFAULT_GPU_FLAG)
+    parser.add_argument("--image_name", "-in", help="The name of image to include in name field of output vectors", default=None)
     parser.add_argument("--pyramid_window_sizes", "-pws", help="Sliding window sizes", default=None)
     parser.add_argument("--pyramid_step_sizes", "-pss", help="Sliding window step sizes", default=None)
     parser.add_argument("--num_processes", "-np", help="Number of CPU processes", default=DEFAULT_NUM_PROCESSES)
