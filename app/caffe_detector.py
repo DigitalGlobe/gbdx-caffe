@@ -20,6 +20,7 @@ from functools import partial
 import zipfile
 import traceback
 import ast
+import scipy.misc
 
 # For profiling the code
 #from profilehooks import profile
@@ -276,8 +277,8 @@ class PyramidWindowBatcher(object):
         return self.batch_size
                 
     def sliding_window(self, image, window_size, step_size):
-        for y in xrange(0, image.shape[0] - window_size[0] + 1, step_size):
-            for x in xrange(0, image.shape[1] - window_size[1] + 1, step_size):
+        for y in xrange(0, image.shape[1] - window_size[0] + 1, step_size):
+            for x in xrange(0, image.shape[2] - window_size[1] + 1, step_size):
                 yield (x, y, image[y:y + window_size[1], x:x + window_size[0]])
 
     def iter_batches(self, image):
@@ -831,7 +832,7 @@ def parse_args(argv):
 
 
 def validate_args(args):
-    validate_file("tif", args.tif, False, ".tif")
+    validate_file("tif", args.tif, False)
     validate_file("imd", args.imd, False, ".imd")
     validate_files("model_paths", args.model_paths, True)
     if args.threshold < 0.0:
