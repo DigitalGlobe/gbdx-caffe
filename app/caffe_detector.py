@@ -194,8 +194,9 @@ class GDALImage:
         if self.padWithZeros:
             if ( data.shape[1] < self.tileheight or data.shape[2] < self.tilewidth ):
                 tile = np.zeros( ( data.shape[0], self.tileheight, self.tilewidth), dtype=data.dtype )
-                tile[:,0:data.shape[1],0:data.shape[2]] = data[:]
+                tile[:,0:data.shape[1],0:data.shape[2]] = data[:,:,:]
                 data = tile
+
         return data
                     
     def tfRasterToProj(self, x,y):
@@ -279,7 +280,7 @@ class PyramidWindowBatcher(object):
     def sliding_window(self, image, window_size, step_size):
         for y in xrange(0, image.shape[1] - window_size[0] + 1, step_size):
             for x in xrange(0, image.shape[2] - window_size[1] + 1, step_size):
-                yield (x, y, image[y:y + window_size[1], x:x + window_size[0]])
+                yield (x, y, image[:, y:y + window_size[1], x:x + window_size[0]])
 
     def iter_batches(self, image):
         return self.window_iteration(image)
