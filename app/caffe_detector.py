@@ -14,19 +14,13 @@ import gdal
 from gdalconst import *
 import osr
 import logging as log
-import skimage.io
 import re
 from string import Template
 from functools import partial
-import tempfile
-import atexit
-import shutil
-import subprocess
 import zipfile
-import uuid
 import traceback
-import cv2
 import ast
+import scipy.misc
 
 # For profiling the code
 #from profilehooks import profile
@@ -38,11 +32,12 @@ os.environ['GLOG_minloglevel'] = '2'
 POLYGON_TEMPLATE = Template("POLYGON (($left $bottom, $left $top, $right $top, $right $bottom, $left $bottom))")
 LABEL_ID_REGEX = re.compile('^n\d+\s*')
 
-INPUT_DIR_PATH = '/mnt/work/input'
-DEFAULT_STATUS_JSON_PATH = '/mnt/work/status.json'
-OUTPUT_VECTORS_DIR_PATH = '/mnt/work/output/result/detections'
+BASE_DIR='/mnt/work/'
+INPUT_DIR_PATH = BASE_DIR+'input'
+DEFAULT_STATUS_JSON_PATH = BASE_DIR+'status.json'
+OUTPUT_VECTORS_DIR_PATH = BASE_DIR+'output/result/detections'
 OUTPUT_VECTORS_FILE = 'detection-results.json'
-OUTPUT_VECTORS_ZIP_PATH = '/mnt/work/output/result/detections.zip'
+OUTPUT_VECTORS_ZIP_PATH = BASE_DIR+'output/result/detections.zip'
 
 RASTER_DIM = 252 + 28
 RASTER_STRIDE = RASTER_DIM - 28
@@ -73,24 +68,16 @@ LABELS_FILE_SUFFIX = "labels.txt"
 CAFFE_GPU_BATCH_SIZE= 80
 CAFFE_CPU_BATCH_SIZE= 40
 
-def caffe_window_transform(window, transformed_size, transformed_window, mean):
+def caffe_ms_band_window_transform(window, transformed_size, transformed_window, mean):
     """
     @param window a (width, height, num_channels) numpy array dtype=int or float
     @param transformed_size A tuple (trans_width, trans_height) representing the size of the transfomred image
     @param transformed window (num_channels, trans_width, trans_height) numpy array dtype must be float (32 or 64)
     """
-    # RGB -> BGR
-    window[:, :, [0, 2]] = window[:, :, [2, 0]]
-    # Channel as leftmost dimension (as required by caffe)
-    # (h, w, 3) -> (3, h, w)
-    # Then scale by 256. to produce images of appropriate scaling for caffe
-    transformed_window[:,:,:] = np.rollaxis(cv2.resize(window[:,:,:3], transformed_size), 2, 0)
-    transformed_window[0,:,:] -= mean[0] # B
-    transformed_window[1,:,:] -= mean[1] # G
-    transformed_window[2,:,:] -= mean[2] # R
 
-    # Scale if needed for model
-    #transformed_window /= 256.
+    for i_band in range(window.shape[0]):
+        transformed_window[i_band,:,:] = scipy.misc.imresize(window[i_band,:,:], transformed_size, interp='bilinear')
+        transformed_window[i_band,:,:] -= mean[i_band]
 
 def caffe_window_transform_bw(window, transformed_size, transformed_window_bw, mean):
     """
@@ -98,34 +85,30 @@ def caffe_window_transform_bw(window, transformed_size, transformed_window_bw, m
     @param transformed_size A tuple (trans_width, trans_height) representing the size of the transfomred image
     @param transformed window (num_channels, trans_width, trans_height) numpy array dtype must be float (32 or 64)
     """
-    # window comes in as RGB
-    # don't convert to BGR since we'll convert to black and white 
+    # Convert RGB to black and white
+    # ITU-R 601-2 luma transform:
+    #   R*299./1000 + G*587./1000 + B*114./1000 (to match PIL.Image)
+    luma_coefs = [.299, .587, .114]
     num_channels = window.shape[2]
     transformed_window = np.zeros(( (num_channels,) + transformed_size), dtype=np.float32)
     if num_channels == 3:
-        transformed_window[:,:,:] = np.rollaxis(cv2.resize(window[:,:,:3], transformed_size), 2, 0)
-        # Convert RGB to black and white
-        # ITU-R 601-2 luma transform:
-        #   R*299./1000 + G*587./1000 + B*114./1000 (to match PIL.Image)
-        transformed_window_bw[0,:,:] = transformed_window[0,:,:]*.299 \
-                                   + transformed_window[1,:,:]*.587 \
-                                   + transformed_window[2,:,:]*.114
+        transformed_window_bw[0,:,:] = 0.
+        for i_band in range(window.shape[0]):
+            transformed_window_bw[0,:,:] += luma_coefs[i_band]*scipy.misc.imresize(window[i_band,:,:], transformed_size, interp='bilinear')
+
     else:
-        transformed_window_bw[0,:,:] = cv2.resize(window[:,:,0], transformed_size)
+        transformed_window_bw[0,:,:] = scipy.misc.imresize(window[i_band,:,:], transformed_size, interp='bilinear')
 
     # Subtract the mean
     transformed_window_bw -= mean[0]
 
-    # Scale if needed for model
-    #transformed_window_bw /= 256.
-
 class GDALImage:
-    def __init__(self, imagefile, tilewidth=256, tileheight=256, strideX=None, strideY=None, padWithZeros=False):
+    def __init__(self, imagefile, tilewidth=256, tileheight=256, strideX=None, strideY=None, bands=None, padWithZeros=False):
         self.imagefile = imagefile
         self.tilewidth = tilewidth
         self.tileheight = tileheight
         # Open dataset
-        self.dataset = gdal.Open(self.imagefile)
+        self.dataset = gdal.Open(self.imagefile, gdal.GA_ReadOnly)
         self.nbands = self.dataset.RasterCount
         self.width = self.dataset.RasterXSize
         self.height = self.dataset.RasterYSize
@@ -155,7 +138,22 @@ class GDALImage:
         self.bb_y0 = 0
         self.bb_x1 = self.width
         self.bb_y1 = self.height
-        
+
+        self.bands = []
+        if not bands is None:
+            # Verify that the bands are all less than the number of bands
+            for i_band in bands:
+                if i_band < self.nbands:
+                    self.bands.append(i_band)
+                else:
+                    error_msg = "Error: band {} not in image {}".format(str(i_band), imagefile)
+                    log.error(error_msg)
+                    raise RuntimeError(error_msg, e)
+        else: 
+            self.bands = [i for i in range(self.nbands)]
+        # Convert to immutable tuple
+        self.bands = tuple(self.bands)
+
     def setBoundingBox(self,x0,y0,x1,y1):
         self.bb_x0 = int ( max( 0, x0 ) )
         self.bb_y0 = int ( max( 0, y0 ) )
@@ -187,14 +185,18 @@ class GDALImage:
 
     def readTile(self, x0, y0, x1, y1):
         data = self.dataset.ReadAsArray(x0, y0, x1-x0, y1-y0)
-        if len(data.shape) == 2:
-            data = np.reshape(data, (data.shape[0], data.shape[1], 1)).transpose(2,0,1)
+
+        if len(data.shape) == 2: # only one band - extend to 3-dim
+            data = np.reshape(data, (1, data.shape[0], data.shape[1]))
+        else:
+            data = data[self.bands,:,:]
 
         if self.padWithZeros:
             if ( data.shape[1] < self.tileheight or data.shape[2] < self.tilewidth ):
                 tile = np.zeros( ( data.shape[0], self.tileheight, self.tilewidth), dtype=data.dtype )
-                tile[:,0:data.shape[1],0:data.shape[2]] = data[:]
+                tile[:,0:data.shape[1],0:data.shape[2]] = data[:,:,:]
                 data = tile
+
         return data
                     
     def tfRasterToProj(self, x,y):
@@ -224,7 +226,7 @@ class GDALImage:
 
 class PyramidWindowBatcher(object):
 
-    def __init__(self, pyramid, num_channels, window_shape, num_windows, max_batch_size=4096, mult_size=256, transform=caffe_window_transform):
+    def __init__(self, pyramid, num_channels, window_shape, num_windows, max_batch_size=4096, mult_size=256, transform=caffe_ms_band_window_transform):
         assert isinstance(pyramid, (Pyramid,))
         self.pyramid = pyramid
 
@@ -276,9 +278,9 @@ class PyramidWindowBatcher(object):
         return self.batch_size
                 
     def sliding_window(self, image, window_size, step_size):
-        for y in xrange(0, image.shape[0] - window_size[0] + 1, step_size):
-            for x in xrange(0, image.shape[1] - window_size[1] + 1, step_size):
-                yield (x, y, image[y:y + window_size[1], x:x + window_size[0]])
+        for y in xrange(0, image.shape[1] - window_size[0] + 1, step_size):
+            for x in xrange(0, image.shape[2] - window_size[1] + 1, step_size):
+                yield (x, y, image[:, y:y + window_size[1], x:x + window_size[0]])
 
     def iter_batches(self, image):
         return self.window_iteration(image)
@@ -351,10 +353,11 @@ class CaffeBatchClassifier(object):
             arr = np.array(caffe.io.blobproto_to_array(blob))
             mean = arr[0].mean(1).mean(1)
 
-        if self.get_caffe_num_channels() == 3:
-            self.transformer = partial(caffe_window_transform, mean=mean)
-        elif self.get_caffe_num_channels() == 1:
+        if self.get_caffe_num_channels() == 1:
             self.transformer = partial(caffe_window_transform_bw, mean=mean)
+        else:
+            # Use specified bands
+            self.transformer = partial(caffe_ms_band_window_transform, mean=mean)
 
     def load_all_models(self):
 
@@ -584,7 +587,7 @@ class Pyramid(object):
         pyramid_histogram = {}
         # Iterator over self
         for win_size, win_step in self:
-            num_windows = num_sliding_windows(image_shape, step_size=win_step, window_size=(win_size, win_size))
+            num_windows = num_sliding_windows(image_shape[1:], step_size=win_step, window_size=(win_size, win_size))
             window_counter += num_windows
             pyramid_histogram[(win_size,win_step)] = num_windows
 
@@ -795,22 +798,23 @@ def classify_broad_area_multi_process(gdal_image, image, x0,y0, args,
 
 def parse_args(argv):
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tif", "-t", help="the geotif to perform analysis on", required=True)
-    parser.add_argument("--imd", "-i", help="the imd metadata file")
-    parser.add_argument("--model_paths", "-m", help="the directory holding the model files", required=True, nargs="+")
+    parser.add_argument("--tif", "-t", help="The geotif to perform analysis on", required=True)
+    parser.add_argument("--imd", "-i", help="The imd metadata file")
+    parser.add_argument("--model_paths", "-m", help="The directory holding the model files", required=True, nargs="+")
     parser.add_argument("--threshold", "-th",
-                        help="the probability threshold above which an item will be written to the output",
+                        help="The probability threshold above which an item will be written to the output",
                         type=float, default=DEFAULT_THRESHOLD)
-    parser.add_argument("--win_size", "-w", help="the window size in pixels", type=int, default=DEFAULT_WIN_SIZE)
-    parser.add_argument("--step_size", "-s", help="the step size in pixels", type=int, default=DEFAULT_STEP_SIZE)
-    parser.add_argument("--status_path", "-sp", help="the output path for the status file", default=DEFAULT_STATUS_JSON_PATH)
-    parser.add_argument("--pyramid_min_size", "-pms", help="the minimum pyramid size in pixels", type=int, default=DEFAULT_MIN_PYRAMID_SIZE)
-    parser.add_argument("--pyramid_scale_factor", "-psf", help="the scale factor to scale images in the pyramid", type=float, default=DEFAULT_PYRAMID_SCALE_FACTOR)
-    parser.add_argument("--bounding_box", "-bb", help="the sub-section of the geotif to analyze", default=None)
-    parser.add_argument("--gpu_flag", "-gf", help="the flag to set when using gpu", default=DEFAULT_GPU_FLAG)
-    parser.add_argument("--image_name", "-in", help="name of image to include in name field of output vectors", default=None)
+    parser.add_argument("--win_size", "-w", help="The window size in pixels", type=int, default=DEFAULT_WIN_SIZE)
+    parser.add_argument("--step_size", "-s", help="The step size in pixels", type=int, default=DEFAULT_STEP_SIZE)
+    parser.add_argument("--status_path", "-sp", help="The output path for the status file", default=DEFAULT_STATUS_JSON_PATH)
+    parser.add_argument("--pyramid_min_size", "-pms", help="The minimum pyramid size in pixels", type=int, default=DEFAULT_MIN_PYRAMID_SIZE)
+    parser.add_argument("--pyramid_scale_factor", "-psf", help="The scale factor to scale images in the pyramid", type=float, default=DEFAULT_PYRAMID_SCALE_FACTOR)
+    parser.add_argument("--bounding_box", "-bb", help="The sub-section of the geotif to analyze", default=None)
+    parser.add_argument("--gpu_flag", "-gf", help="The flag to set when using gpu", default=DEFAULT_GPU_FLAG)
+    parser.add_argument("--image_name", "-in", help="The name of image to include in name field of output vectors", default=None)
     parser.add_argument("--pyramid_window_sizes", "-pws", help="Sliding window sizes", default=None)
     parser.add_argument("--pyramid_step_sizes", "-pss", help="Sliding window step sizes", default=None)
+    parser.add_argument("--bands", "-b", help="Band", default=None)
     parser.add_argument("--num_processes", "-np", help="Number of CPU processes", default=DEFAULT_NUM_PROCESSES)
     
     parser.add_argument("--log_level", "-ll", 
@@ -829,7 +833,7 @@ def parse_args(argv):
 
 
 def validate_args(args):
-    validate_file("tif", args.tif, False, ".tif")
+    validate_file("tif", args.tif, False)
     validate_file("imd", args.imd, False, ".imd")
     validate_files("model_paths", args.model_paths, True)
     if args.threshold < 0.0:
@@ -857,6 +861,8 @@ def validate_args(args):
     # Check pyramid_window_sizes and pyramid_step_sizes has the same length
     if  args.pyramid_window_sizes and args.pyramid_step_sizes and len(args.pyramid_step_sizes) != len(args.pyramid_window_sizes):
         raise RuntimeError("Pyramid window sizes length {} != Pyramid step sizes length {} ".format(len(args.pyramid_window_sizes), len(args.pyramid_step_sizes)))
+
+    args.bands = validate_create_int_list("bands", args.bands)
 
     # Cast as integer
     args.num_processes = int(args.num_processes)
@@ -1018,7 +1024,7 @@ def stretchData(data,pct=2):
     a,b = np.percentile(data, [pct, 100-pct])
     return 255 * ( data - a ) / (b-a+0.001)
 
-def tile_list_classifier(tile_list, args, image_name, item_date, sat_id, cat_id, mean_files, caffemodels, deploy_files, labels_files, threshold_dict):
+def tile_list_classifier(tile_list, args, image_name, item_date, sat_id, cat_id, mean_files, caffemodels, deploy_files, labels_files, bands, threshold_dict):
 
     # Create classifier object
     classifier = CaffeBatchClassifier(
@@ -1029,7 +1035,7 @@ def tile_list_classifier(tile_list, args, image_name, item_date, sat_id, cat_id,
                      gpu_flag=args.gpu_flag)
     
     # open image
-    gdal_image = GDALImage(args.tif, RASTER_DIM, RASTER_DIM, strideX=RASTER_STRIDE, strideY=RASTER_STRIDE, padWithZeros=True) 
+    gdal_image = GDALImage(args.tif, RASTER_DIM, RASTER_DIM, strideX=RASTER_STRIDE, strideY=RASTER_STRIDE, bands=bands, padWithZeros=True) 
 
     for tile in tile_list:
         
@@ -1037,15 +1043,8 @@ def tile_list_classifier(tile_list, args, image_name, item_date, sat_id, cat_id,
         
         image = gdal_image.readTile( tile[0], tile[1], tile[2], tile[3] )
                 
-        # If single channel (w, h) resize the array to (w, h, 1)
-        if len(image.shape) == 2:
-            image = np.reshape(image, (image.shape[0], image.shape[1], 1))
-        else:
-            image = image.transpose(1,2,0)
-
-        # Check that we are not running pan imagery against an RGB caffe model
-        if image.shape[2] < 3 and classifier.get_caffe_num_channels() == 3:
-            log.info("Exception: Cannot run pan imagery (number of bands < 3) with a 3 channel Caffe model.")
+        if image.shape[0] < classifier.get_caffe_num_channels():
+            log.info("Exception: Cannot run imagery with fewer bands than Caffe model.")
             raise RuntimeError
                                                 
         classify_broad_area_multi_process(gdal_image, image, tile[0], tile[1], args,
@@ -1128,7 +1127,7 @@ def process_args(args):
     
     if ( args.num_processes < 2 ):
         tile_list_classifier(all_tiles, args, image_name, item_date, sat_id, cat_id, mean_files,
-                             caffemodels, deploy_files, labels_files, threshold_dict)
+                             caffemodels, deploy_files, labels_files, args.bands, threshold_dict)
     else:
         manager = mp.Manager()
         pool = mp.Pool(processes=args.num_processes)
@@ -1141,7 +1140,7 @@ def process_args(args):
             # it cannot be passed in to apply_async         
             pool.apply_async(tile_list_classifier,
                 (tile_list, args, image_name, item_date, sat_id, cat_id, mean_files,
-                 caffemodels, deploy_files, labels_files, threshold_dict))
+                 caffemodels, deploy_files, labels_files, args.bands, threshold_dict))
      
         pool.close()
         pool.join()
